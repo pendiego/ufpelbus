@@ -1400,15 +1400,17 @@ export default function HomePage() {
   return (
     <ThemeProvider theme={theme}>
       <Box className="home-page-bg">
-        <Box className="home-page-container">
+        <Box className={`home-page-container ${modo !== 'embarcar' ? 'no-logo' : ''}`}>
           
-          <div className="brand-logo-container">
-            <img 
-              src="/buslogo.svg" 
-              alt="Busepel Logo" 
-              className="auth-logo-svg" 
-            />
-          </div>
+          {modo === 'embarcar' && (
+            <div className="brand-logo-container">
+              <img 
+                src="/buslogo.svg" 
+                alt="Busepel Logo" 
+                className="brand-logo" 
+              />
+            </div>
+          )}
 
           <div className="scroll-content">
             {/* MODO EMBARCAR */}

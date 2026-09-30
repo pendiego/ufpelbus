@@ -30,8 +30,8 @@
 .brand-logo-container {
   display: flex;
   justify-content: center;
-  margin-top: 23px;
-  margin-bottom: 23px;
+  margin-top: 20px;
+  margin-bottom: 20px;
   flex-shrink: 0;
 }
 
@@ -40,6 +40,9 @@
   width: auto;
 }
 
+.home-page-container.no-logo .scroll-content {
+  margin-top: 20px;
+}
 /* Título das Telas */
 .screen-title {
   font-size: 32px;
