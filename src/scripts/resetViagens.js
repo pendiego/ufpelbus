@@ -1,23 +1,24 @@
 // scripts/resetViagens.js
-// Executa reset de viagens ativas. Pode ser chamado via cron ou Cloud Function.
-
 const admin = require("firebase-admin");
 
-if (!admin.apps.length) {
-  admin.initializeApp();
+// Não inicializa aqui: o runtime das Cloud Functions já faz isso.
+// Para execução standalone (node resetViagens.js), inicialize com
+// GOOGLE_APPLICATION_CREDENTIALS apontando para uma service account.
+function getDb() {
+  if (!admin.apps.length) {
+    admin.initializeApp();
+  }
+  return admin.firestore();
 }
 
-const db = admin.firestore();
-
-// Firestore limita batch a 500 operações. Deixamos margem de segurança.
 const TAMANHO_BATCH = 450;
 
 async function resetViagens() {
+  const db = getDb(); // pega a instância correta
   console.log("[Reset] Iniciando reset de viagens ativas...");
 
   try {
-    // ============ 1. LIMPAR viagemAtualId DOS USUÁRIOS ============
-    // Pega apenas quem realmente tem viagem ativa (evita reescrever milhares de docs)
+    // 1. Limpar viagemAtualId dos usuários
     const usuariosSnapshot = await db
       .collection("usuarios")
       .where("viagemAtualId", "!=", null)
@@ -31,23 +32,17 @@ async function resetViagens() {
       batch.update(doc.ref, { viagemAtualId: null });
       opsNoBatch++;
       countUsuarios++;
-
       if (opsNoBatch >= TAMANHO_BATCH) {
         await batch.commit();
         batch = db.batch();
         opsNoBatch = 0;
       }
     }
-
     if (opsNoBatch > 0) await batch.commit();
+    console.log(`[Reset] viagemAtualId resetado para ${countUsuarios} usuários.`);
 
-    console.log(
-      `[Reset] viagemAtualId resetado para ${countUsuarios} usuários.`,
-    );
-
-    // ============ 2. DELETAR TODAS AS VIAGENS ATIVAS ============
+    // 2. Deletar todas as viagens ativas
     const viagensSnapshot = await db.collection("viagens_ativas").get();
-
     let countViagens = 0;
     batch = db.batch();
     opsNoBatch = 0;
@@ -56,14 +51,12 @@ async function resetViagens() {
       batch.delete(doc.ref);
       opsNoBatch++;
       countViagens++;
-
       if (opsNoBatch >= TAMANHO_BATCH) {
         await batch.commit();
         batch = db.batch();
         opsNoBatch = 0;
       }
     }
-
     if (opsNoBatch > 0) await batch.commit();
 
     console.log(`[Reset] ${countViagens} viagens ativas removidas.`);
@@ -77,8 +70,8 @@ async function resetViagens() {
 if (require.main === module) {
   resetViagens()
     .then(() => process.exit(0))
-    .catch((error) => {
-      console.error(error);
+    .catch((err) => {
+      console.error(err);
       process.exit(1);
     });
 }

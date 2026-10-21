@@ -155,6 +155,37 @@ export default function MainPage({
     return getCoords(origem);
   }, [origem, paradasData, getCoords]);
 
+  useEffect(() => {
+  if (modoApenasConsulta) return;
+  if (statusFluxo !== 'inicial') return; // já está numa viagem desta sessão
+  if (!tripId) return;
+
+  const usuario = auth.currentUser;
+  if (!usuario) return;
+
+  let cancelado = false;
+  (async () => {
+    try {
+      const userRef = doc(db, "usuarios", usuario.uid);
+      const snap = await getDoc(userRef);
+      if (cancelado || !snap.exists()) return;
+
+      const viagemAtual = snap.data().viagemAtualId;
+      if (viagemAtual && viagemAtual !== tripId) {
+        console.log(
+          `[MainPage] Limpando viagemAtiva anterior (${viagemAtual}) ao entrar no mapa de ${tripId}`
+        );
+        await updateDoc(userRef, { viagemAtualId: null });
+      }
+    } catch (e) {
+      console.warn("[MainPage] Erro ao limpar viagem anterior:", e);
+    }
+  })();
+
+  return () => { cancelado = true; };
+}, [modoApenasConsulta, statusFluxo, tripId, auth]);
+
+
   // ==================== LÓGICA DE ESTIMATIVAS ====================
   const calcularHorarioChegadaOnibus = useCallback(async () => {
     if (!itinerario || !horario || !origem || Object.keys(paradasData).length === 0) return;
@@ -589,7 +620,7 @@ export default function MainPage({
     const agoraMs = Date.now();
     const votosRecentes = viagemAtiva.historicoLotacao.filter(voto => {
       const dataVoto = voto.data?.toDate ? voto.data.toDate().getTime() : (voto.data?.seconds * 1000 || agoraMs);
-      return (agoraMs - dataVoto) <= 5 * 60 * 1000;
+      return (agoraMs - dataVoto) <= 20 * 60 * 1000;
     });
     if (votosRecentes.length === 0) return null;
     const soma = votosRecentes.reduce((acc, curr) => acc + curr.valor, 0);

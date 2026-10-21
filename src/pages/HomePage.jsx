@@ -29,7 +29,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { useAppData } from '../App';
 import { getFavoritos, toggleFavorito } from '../services/favoritosService';
-import { getAllApelidos, setMultiplosApelidos } from '../services/apelidosService';
+import { getAllApelidos, setMultiplosApelidos, getApelidoComFallback } from '../services/apelidosService';
 import './HomePage.css';
 
 const theme = createTheme({
@@ -44,16 +44,24 @@ const theme = createTheme({
 const PARADAS_IGNORADAS = ['int_', 'ponto-indefinido'];
 
 // ==================== COMPONENTE DE ITEM DE ÔNIBUS ====================
+// Janela de validade da lotação — mesma do MainPage (20 min)
+const JANELA_LOTACAO_MS = 20 * 60 * 1000;
+// Intervalo de atualização do "há X minutos" (30s, conforme pedido)
+const INTERVALO_TEMPO_DECORRIDO_MS = 30 * 1000;
+
 const BusItem = ({ opt, onClick, safeTraduzir }) => {
-  const [viagemInfo, setViagemInfo] = useState({ lastStop: null, lotacao: null, atualizadoEm: null, indiceParada: null });
+  const [viagemInfo, setViagemInfo] = useState({
+    ultimaParada: null,
+    historicoLotacao: [],
+    atualizadoEm: null,
+    indiceParada: null,
+  });
   const [tempoParaOnibusChegar, setTempoParaOnibusChegar] = useState(null);
   const [carregandoTempo, setCarregandoTempo] = useState(false);
-  const [isExpirado, setIsExpirado] = useState(false);
   const [tempoDecorrido, setTempoDecorrido] = useState(null);
   const intervalRef = useRef(null);
 
-  // Calcula o horário estimado de chegada baseado no horário atual
- const calcularHorarioChegada = (minutosEstimados) => {
+  const calcularHorarioChegada = (minutosEstimados) => {
     if (!minutosEstimados || minutosEstimados < 0) return null;
     if (!opt?.horario) return null;
 
@@ -64,32 +72,68 @@ const BusItem = ({ opt, onClick, safeTraduzir }) => {
     return dataSaida.toTimeString().slice(0, 5);
   };
 
+  // ============ SNAPSHOT DO FIRESTORE ============
+  // Lê os mesmos campos que o MainPage usa: ultimaParada, historicoLotacao,
+  // atualizadoEm, indiceParada.
   useEffect(() => {
     if (!opt?.it?.id || !opt?.horario) return;
     const dataAtual = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const tripId = `${opt.it.id}_${opt.horario.replace(':', '')}_${dataAtual}`;
+
     const unsub = onSnapshot(doc(db, "viagens_ativas", tripId), (d) => {
       if (d.exists()) {
-        setViagemInfo(d.data());
+        const dados = d.data();
+        setViagemInfo({
+          ultimaParada: dados.ultimaParada || dados.paradaAtual || null,
+          historicoLotacao: dados.historicoLotacao || [],
+          atualizadoEm: dados.atualizadoEm || null,
+          indiceParada: dados.indiceParada ?? null,
+        });
       } else {
-        setViagemInfo({ lastStop: null, lotacao: null, atualizadoEm: null, indiceParada: null });
+        setViagemInfo({
+          ultimaParada: null,
+          historicoLotacao: [],
+          atualizadoEm: null,
+          indiceParada: null,
+        });
       }
     });
     return () => unsub();
   }, [opt]);
 
-  useEffect(() => {
-    if (!viagemInfo.atualizadoEm || !opt.it?.duracaoEstimada) {
-      setIsExpirado(false);
-      return;
-    }
-    const agora = new Date();
-    const dataPost = viagemInfo.atualizadoEm.toDate?.() || new Date(viagemInfo.atualizadoEm.seconds * 1000);
-    const minutosPassados = Math.floor((agora - dataPost) / 60000);
-    setIsExpirado(minutosPassados > Number(opt.it.duracaoEstimada));
-  }, [viagemInfo.atualizadoEm, opt.it]);
+  // ============ LOTACAO (mesma lógica do MainPage) ============
+  const infoLotacao = useMemo(() => {
+    const historico = viagemInfo.historicoLotacao;
+    if (!historico || historico.length === 0) return null;
 
-  // Atualiza o tempo decorrido a cada 15 segundos
+    const agoraMs = Date.now();
+    const votosRecentes = historico.filter((voto) => {
+      const dataVoto = voto.data?.toDate
+        ? voto.data.toDate().getTime()
+        : voto.data?.seconds * 1000 || agoraMs;
+      return agoraMs - dataVoto <= JANELA_LOTACAO_MS;
+    });
+    if (votosRecentes.length === 0) return null;
+
+    const soma = votosRecentes.reduce((acc, curr) => acc + (curr.valor || 0), 0);
+    const media = parseFloat((soma / votosRecentes.length).toFixed(1));
+
+    let label = 'Vazio';
+    let cor = '#0EA503';
+    let emoji = '🟢';
+    if (media > 4.0) {
+      label = 'Lotado';
+      cor = '#C4151C';
+      emoji = '🔴';
+    } else if (media > 2.5) {
+      label = 'Médio';
+      cor = '#FF8A31';
+      emoji = '🟡';
+    }
+    return { media, label, cor, emoji };
+  }, [viagemInfo.historicoLotacao]);
+
+  // ============ TEMPO DECORRIDO (atualiza a cada 30s) ============
   useEffect(() => {
     const atualizarTempoDecorrido = () => {
       if (!viagemInfo.atualizadoEm) {
@@ -97,7 +141,9 @@ const BusItem = ({ opt, onClick, safeTraduzir }) => {
         return;
       }
       const agora = Date.now();
-      const dataPost = viagemInfo.atualizadoEm.toDate?.() || new Date(viagemInfo.atualizadoEm.seconds * 1000);
+      const dataPost = viagemInfo.atualizadoEm.toDate
+        ? viagemInfo.atualizadoEm.toDate()
+        : new Date(viagemInfo.atualizadoEm.seconds * 1000);
       const diffMs = agora - dataPost.getTime();
       const diffMinutos = Math.floor(diffMs / 60000);
       setTempoDecorrido(diffMinutos);
@@ -106,68 +152,74 @@ const BusItem = ({ opt, onClick, safeTraduzir }) => {
     atualizarTempoDecorrido();
 
     if (intervalRef.current) clearInterval(intervalRef.current);
-    intervalRef.current = setInterval(atualizarTempoDecorrido, 15000);
+    intervalRef.current = setInterval(
+      atualizarTempoDecorrido,
+      INTERVALO_TEMPO_DECORRIDO_MS
+    );
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [viagemInfo.atualizadoEm]);
 
+  // ============ TEMPO ESTIMADO ATÉ A PARADA DO USUÁRIO ============
   useEffect(() => {
     const buscarTempoEstimado = async () => {
       if (!opt?.it?.id || !opt?.horario || !opt?.origem || !opt?.idxO) return;
-      if (!viagemInfo || viagemInfo.indiceParada === undefined) return;
+      if (viagemInfo.indiceParada === null || viagemInfo.indiceParada === undefined) return;
+
       setCarregandoTempo(true);
       try {
         const DocsViagem = { indiceParada: viagemInfo.indiceParada || 0 };
-        const resultado = await calcularTempoParaOnibusChegarAteVoce(DocsViagem, opt.it, opt.origem, opt.horario);
+        const resultado = await calcularTempoParaOnibusChegarAteVoce(
+          DocsViagem,
+          opt.it,
+          opt.origem,
+          opt.horario
+        );
         if (resultado) setTempoParaOnibusChegar(resultado);
       } catch (error) {
-        console.warn("Erro ao buscar tempo estimado:", error);
+        console.warn('Erro ao buscar tempo estimado:', error);
       } finally {
         setCarregandoTempo(false);
       }
     };
     buscarTempoEstimado();
-  }, [opt, viagemInfo]);
+  }, [opt, viagemInfo.indiceParada]);
 
-  // Atualiza a estimativa a cada 15 segundos
+  // Atualiza estimativa a cada 30s (alinhado ao tempoDecorrido)
   useEffect(() => {
     if (!opt?.it?.id || !opt?.horario || !opt?.origem) return;
-    
+
     const atualizarEstimativa = () => {
-      if (!viagemInfo || viagemInfo.indiceParada === undefined) return;
+      if (viagemInfo.indiceParada === null || viagemInfo.indiceParada === undefined) return;
       setCarregandoTempo(true);
       (async () => {
         try {
           const DocsViagem = { indiceParada: viagemInfo.indiceParada || 0 };
-          const resultado = await calcularTempoParaOnibusChegarAteVoce(DocsViagem, opt.it, opt.origem, opt.horario);
+          const resultado = await calcularTempoParaOnibusChegarAteVoce(
+            DocsViagem,
+            opt.it,
+            opt.origem,
+            opt.horario
+          );
           if (resultado) setTempoParaOnibusChegar(resultado);
         } catch (error) {
-          console.warn("Erro ao buscar tempo estimado:", error);
+          console.warn('Erro ao buscar tempo estimado:', error);
         } finally {
           setCarregandoTempo(false);
         }
       })();
     };
 
-    const estimativaInterval = setInterval(atualizarEstimativa, 15000);
-    
-    return () => {
-      clearInterval(estimativaInterval);
-    };
-  }, [opt, viagemInfo]);
+    const estimativaInterval = setInterval(
+      atualizarEstimativa,
+      INTERVALO_TEMPO_DECORRIDO_MS
+    );
+    return () => clearInterval(estimativaInterval);
+  }, [opt, viagemInfo.indiceParada]);
 
-  const getEmojiLotacao = (nivel) => {
-    if (isExpirado) return '🟡';
-    if (nivel === 'lotado') return '🔴';
-    if (nivel === 'medio') return '🟡';
-    if (nivel === 'vazio') return '🟢';
-    return '';
-  };
-
-  const temInformacaoAtiva = viagemInfo.lastStop && !isExpirado && viagemInfo.atualizadoEm;
-
+  // ============ DERIVADOS ============
   const formatarTempoDecorrido = (minutos) => {
     if (minutos === null || minutos === undefined) return null;
     if (minutos < 1) return 'agora mesmo';
@@ -176,6 +228,10 @@ const BusItem = ({ opt, onClick, safeTraduzir }) => {
   };
 
   const tempoDecorridoFormatado = formatarTempoDecorrido(tempoDecorrido);
+
+  // "Tem informação" = existe uma última parada OU um atualizadoEm
+  // (não dependemos mais de duracaoEstimada nem de lastStop).
+  const temInformacaoAtiva = !!viagemInfo.ultimaParada || !!viagemInfo.atualizadoEm;
 
   const horarioChegadaEstimado = useMemo(() => {
     if (tempoParaOnibusChegar?.status === 'chegando' && tempoParaOnibusChegar.minutos) {
@@ -189,24 +245,29 @@ const BusItem = ({ opt, onClick, safeTraduzir }) => {
 
   return (
     <Paper className="bus-item-card" elevation={0}>
-      <ListItemButton onClick={onClick} sx={{ p: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <ListItemButton
+        onClick={onClick}
+        sx={{ p: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+      >
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Typography className="bus-item-title">{opt.cat}</Typography>
-            {viagemInfo.lotacao && !isExpirado && (
-              <span style={{ fontSize: '14px' }}>{getEmojiLotacao(viagemInfo.lotacao)}</span>
+            {infoLotacao && (
+              <span style={{ fontSize: '14px' }}>{infoLotacao.emoji}</span>
             )}
           </Box>
 
           {temInformacaoAtiva ? (
             <>
-              <Typography className="bus-item-info-line">
-                Visto por último em: {safeTraduzir(viagemInfo.lastStop)}
-                {tempoDecorridoFormatado && ` (há ${tempoDecorridoFormatado})`}
-              </Typography>
-              {viagemInfo.lotacao && !isExpirado && (
+              {viagemInfo.ultimaParada && (
+                <Typography className="bus-item-info-line">
+                  Visto por último em: {safeTraduzir(viagemInfo.ultimaParada)}
+                  {tempoDecorridoFormatado && ` (há ${tempoDecorridoFormatado})`}
+                </Typography>
+              )}
+              {infoLotacao && (
                 <Typography className="bus-item-info-line" style={{ color: '#A1A1AA' }}>
-                  Lotação: {viagemInfo.lotacao === 'vazio' ? 'Vazio' : viagemInfo.lotacao === 'medio' ? 'Médio' : 'Lotado'}
+                  Lotação: {infoLotacao.label}
                 </Typography>
               )}
             </>
@@ -249,13 +310,16 @@ const ModalRenomear = ({ open, onClose, idsParadas }) => {
     }
   }, [open]);
 
-  useEffect(() => {
-    const filtrada = idsParadas.filter(id => {
-      if (!id || typeof id !== 'string') return false;
-      return !PARADAS_IGNORADAS.some(p => id.startsWith(p) || id === p);
-    });
-    setListaOrdenada([...filtrada].sort((a, b) => traduzirSigla(a).localeCompare(traduzirSigla(b))));
-  }, [idsParadas]);
+useEffect(() => {
+  const filtrada = idsParadas.filter(id => {
+    if (!id || typeof id !== 'string') return false;
+    return !PARADAS_IGNORADAS.some(p => id.startsWith(p) || id === p);
+  });
+  const nomeExibido = (id) => apelidos[id] || traduzirSigla(id);
+  setListaOrdenada(
+    [...filtrada].sort((a, b) => nomeExibido(a).localeCompare(nomeExibido(b), 'pt-BR'))
+  );
+}, [idsParadas, apelidos]);
 
   const handleMudarApelido = (sigla, novoNome) => {
     setApelidos(prev => ({ ...prev, [sigla]: novoNome }));
@@ -456,13 +520,14 @@ const ModalFavoritos = ({ open, onClose, idsParadas }) => {
       if (!id || typeof id !== 'string') return false;
       return !PARADAS_IGNORADAS.some(p => id.startsWith(p) || id === p);
     });
-    const ordenada = [...filtrada].sort((a, b) => {
-      const aFav = favoritos.includes(a);
-      const bFav = favoritos.includes(b);
-      if (aFav && !bFav) return -1;
-      if (!aFav && bFav) return 1;
-      return traduzirSigla(a).localeCompare(traduzirSigla(b));
-    });
+    const nomeExibido = (id) => getApelidoComFallback(id, traduzirSigla(id));
+const ordenada = [...filtrada].sort((a, b) => {
+  const aFav = favoritos.includes(a);
+  const bFav = favoritos.includes(b);
+  if (aFav && !bFav) return -1;
+  if (!aFav && bFav) return 1;
+  return nomeExibido(a).localeCompare(nomeExibido(b), 'pt-BR');
+});
     setListaOrdenada(ordenada);
   }, [idsParadas, favoritos]);
 
@@ -950,6 +1015,24 @@ const ModalSaibaMais = ({ open, onClose }) => {
           >
             Clique aqui para entrar no grupo
           </Link>
+                <Typography variant="body1" sx={{ color: '#E0E0E0', lineHeight: 1.8, mb: 2 }}>
+        Siga a gente no Instagram:
+      </Typography>
+      <Link
+        href="https://instagram.com/busepel.app"
+        target="_blank"
+        rel="noopener noreferrer"
+        sx={{
+          color: '#0845FF',
+          fontWeight: 600,
+          textDecoration: 'underline',
+          mb: 2,
+          display: 'inline-block',
+          '&:hover': { color: '#0037CC' }
+        }}
+      >
+        @busepel.app
+      </Link>
         </Box>
         
         <Button 
@@ -1602,7 +1685,7 @@ export default function HomePage() {
                     variant="body2"
                     onClick={() => setModalSaibaMaisOpen(true)}
                     sx={{
-                      color: '#7C7C7C',
+                      color: '#ffffff',
                       textDecoration: 'underline',
                       fontSize: '14px',
                       cursor: 'pointer',

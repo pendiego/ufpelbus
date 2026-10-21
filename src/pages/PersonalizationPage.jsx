@@ -136,18 +136,16 @@ export default function PersonalizationPage({ onVoltar, idsParadas, onApelidosSa
    * 1. Favoritas primeiro
    * 2. Depois em ordem alfabética pelo nome traduzido
    */
-  const listaOrdenada = useMemo(() => {
-    return [...listaFiltrada].sort((a, b) => {
-      const aFav = favoritos.includes(a);
-      const bFav = favoritos.includes(b);
-      
-      if (aFav && !bFav) return -1;  // A é favorito, B não → A vem primeiro
-      if (!aFav && bFav) return 1;   // B é favorito, A não → B vem primeiro
-      
-      // Ambos favoritos ou ambos não favoritos → ordena por nome traduzido
-      return traduzirSigla(a).localeCompare(traduzirSigla(b));
-    });
-  }, [listaFiltrada, favoritos]);
+const listaOrdenada = useMemo(() => {
+  const nomeExibido = (id) => apelidos[id] || traduzirSigla(id);
+  return [...listaFiltrada].sort((a, b) => {
+    const aFav = favoritos.includes(a);
+    const bFav = favoritos.includes(b);
+    if (aFav && !bFav) return -1;
+    if (!aFav && bFav) return 1;
+    return nomeExibido(a).localeCompare(nomeExibido(b), 'pt-BR');
+  });
+}, [listaFiltrada, favoritos, apelidos]);
 
   // ==================== RENDERIZAÇÃO ====================
   

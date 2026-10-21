@@ -1,10 +1,16 @@
-const functions = require("firebase-functions");
-const { resetViagens } = require("./resetViagens"); // ou importe do caminho certo
+// functions/index.js
+const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { resetViagens } = require("./resetViagens");
 
-exports.resetViagensAgendado = functions.pubsub
-  .schedule("0 3 * * *")
-  .timeZone("America/Sao_Paulo")
-  .onRun(async (context) => {
+exports.resetViagensAgendado = onSchedule(
+  {
+    schedule: "0 3 * * *",
+    timeZone: "America/Sao_Paulo",
+    memory: "512MiB",
+    timeoutSeconds: 540,
+    retryCount: 0,
+  },
+  async () => {
     await resetViagens();
-    return null;
-  });
+  }
+);

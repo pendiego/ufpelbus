@@ -21,18 +21,18 @@
 }
 
 .leaflet-container {
-  background-color: #45516E !important;
+  background-color: #0f1b36 !important;
 }
 
 /* Ajuste para o mapa */
 .leaflet-tile-pane {
-  opacity: 0.6;
+  opacity: 0.3;
   mix-blend-mode: multiply;
 }
 
 /* Filtros para as imagens dos tiles */
 .leaflet-tile-pane img {
-  filter: brightness(2.3) saturate(0.5) contrast(1.4);
+  filter: brightness(2) saturate(0) contrast(1);
 }
 
 /* ================= TOP UI ================= */
@@ -124,7 +124,7 @@
 /* Bloco escuro de informações inspirado na referência */
 .map-info-card {
   pointer-events: auto;
-  background-color: #2A2A2A;
+  background-color: #2A2A2A !important; /* Força a cor sólida */
   border-radius: 20px;
   padding: 16px 20px;
   display: flex;
